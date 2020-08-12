@@ -1,0 +1,113 @@
+ https://towardsdatascience.com/unsupervised-sentiment-analysis-a38bf1906483   
+   DATA CLEANING 
+    dropping rows with missing (NaN) values,
+    dropping duplicated rows,
+    removing rows with rate equal to 0, as it contained some error, probably from the data gathering phase,
+    replacing polish letters with use of unidecode package,
+    replacing all non-alphanumeric signs, punctuation signs, and duplicated white spaces with a single white space
+    retaining all rows with sentences with a length of at least 2 words.
+    
+    uses Word2Vec and Levenstein distance, to detect semantically most similar words:
+    
+    GENISMS WORD2VEC:
+    w2v_model = Word2Vec(min_count=3,
+                     window=4,
+                     size=300,
+                     sample=1e-5, 
+                     alpha=0.03, 
+                     min_alpha=0.0007, 
+                     negative=20,
+                     workers=multiprocessing.cpu_count()-1)
+                     
+KMEANS CLUSTERING 
+ K-means algorithm with 50 repeated starting points, to presumably prevent the algorithm from choosing wrong starting centroid coordinates, that would lead the algorithm to converge to not optimal clusters, and 1000 iterations of reassigning points to clusters.
+ model.cluster_centers_
+ word_vectors.similar_by_vector(model.cluster_centers_[0], topn=10, restrict_vocab=None) 
+ ^ uses cosine similarity, could implement k means clustering with cosine distance also.
+ 
+ sentiment score (inverse of distance from cluster it was assigned to, see the code in repository for details)
+ 
+ 
+ASSIGN SENTIMENT SCORE
+ assign each word sentiment score — negative or positive value (-1 or 1) based on the cluster to which they belong. To weigh this score I multiplied it by how close they were to their cluster (to weigh how potentially positive/negative they are).  As the score that K-means algorithm outputs is distance from both clusters, to properly weigh them I multiplied them by the inverse of closeness score (divided sentiment score by closeness score)
+ 
+ words = pd.DataFrame(word_vectors.vocab.keys())
+words.columns = ['words']
+words['vectors'] = words.words.apply(lambda x: word_vectors.wv[f'{x}'])
+words['cluster'] = words.vectors.apply(lambda x: model.predict([np.array(x)]))
+words.cluster = words.cluster.apply(lambda x: x[0])
+words['cluster_value'] = [1 if i==0 else -1 for i in words.cluster]
+words['closeness_score'] = words.apply(lambda x: 1/(model.transform([x.vectors]).min()), axis=1)
+words['sentiment_coeff'] = words.closeness_score * words.cluster_value
+
+with these steps being complete, there was full dictionary created (in form of pandas DataFrame), where each word had it’s own weighted sentiment score. To assess how accurate these weighted sentiment coefficients were, I randomly sampled dataframe with obtained coefficients
+Probably, the best option to correct it would be to normalize data properly or to create 3rd, neutral cluster for words that shouldn’t have any sentiment at all assigned to them,
+
+TFIDF FOR EACH WORD IN EACH SENTENCE
+next step was to calculate tfidf score of each word in each sentence with sklearn’s TfidfVectorizer. This step was conducted to consider how unique every word was for every sentence, and increase positive/negative signal associated with words that are highly specific for given sentence in comparison to whole corpus.
+tfidf = TfidfVectorizer(tokenizer=lambda y: y.split(), norm=None)
+tfidf.fit(file_weighting.title)
+features = pd.Series(tfidf.get_feature_names())
+transformed = tfidf.transform(file_weighting.title)
+
+def create_tfidf_dictionary(x, transformed_file, features):
+    '''
+    create dictionary for each input sentence x, where each word has assigned its tfidf score
+    
+    inspired  by function from this wonderful article: 
+    https://medium.com/analytics-vidhya/automated-keyword-extraction-from-articles-using-nlp-bfd864f41b34
+    
+    x - row of dataframe, containing sentences, and their indexes,
+    transformed_file - all sentences transformed with TfidfVectorizer
+    features - names of all words in corpus used in TfidfVectorizer
+    '''
+    vector_coo = transformed_file[x.name].tocoo()
+    vector_coo.col = features.iloc[vector_coo.col].values
+    dict_from_coo = dict(zip(vector_coo.col, vector_coo.data))
+    return dict_from_coo
+
+def replace_tfidf_words(x, transformed_file, features):
+    '''
+    replacing each word with it's calculated tfidf dictionary with scores of each word
+    x - row of dataframe, containing sentences, and their indexes,
+    transformed_file - all sentences transformed with TfidfVectorizer
+    features - names of all words in corpus used in TfidfVectorizer
+    '''
+    dictionary = create_tfidf_dictionary(x, transformed_file, features)   
+    return list(map(lambda y:dictionary[f'{y}'], x.title.split()))
+    
+%%time
+replaced_tfidf_scores = file_weighting.apply(lambda x: replace_tfidf_words(x, transformed, features), axis=1)
+
+Gists above and below present functions for replacing words in sentences with their associated tfidf/sentiment scores, to obtain 2 vectors for each sentence
+
+def replace_sentiment_words(word, sentiment_dict):
+    '''
+    replacing each word with its associated sentiment score from sentiment dict
+    '''
+    try:
+        out = sentiment_dict[word]
+    except KeyError:
+        out = 0
+    return out
+  
+  replaced_closeness_scores = file_weighting.title.apply(lambda x: list(map(lambda y: replace_sentiment_words(y, sentiment_dict), x.split())))
+  
+  The dot product of such 2 sentence vectors indicated whether overall sentiment was positive or negative (if the dot product was positive, the sentiment was positive, and in opposite case negative).
+  replacement_df = pd.DataFrame(data=[replaced_closeness_scores, replaced_tfidf_scores, file_weighting.title, file_weighting.rate]).T
+replacement_df.columns = ['sentiment_coeff', 'tfidf_scores', 'sentence', 'sentiment']
+replacement_df['sentiment_rate'] = replacement_df.apply(lambda x: np.array(x.loc['sentiment_coeff']) @ np.array(x.loc['tfidf_scores']), axis=1)
+replacement_df['prediction'] = (replacement_df.sentiment_rate>0).astype('int8')
+view raw
+
+Improvements:
+Hyperparameter tuning of Word2Vec algorithm, based on e.g. F1-score achieved on dataset (though it would require splitting the dataset into train and test datasets, as the training would become supervised)
+
+
+
+Schedule:
+Week 7, Tuesday: Scope locked and put in #projects channel
+Week 7, Friday: Data cleaned
+Week 8, Monday: MVPs
+Week 8, Wednesday: Modeling done
+Week 8, Friday: Presentation day

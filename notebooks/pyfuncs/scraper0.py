@@ -29,7 +29,6 @@ class Google_Shopping_Scraper:
         driver = webdriver.Chrome(chrome_options=None)
         driver.get('https://shopping.google.com/?nord=1')
         self.driver = driver
-        self.driver.implicitly_wait(.05)
 
     def __init__(self, product_name, n_reviews=10, n_pages=3):
         self.n_reviews = n_reviews
@@ -49,13 +48,10 @@ class Google_Shopping_Scraper:
         sleep(1)
         search_button.click()
         sleep(1)
-        try:
-            list_or_grid = self.driver.find_element_by_css_selector('div#taw > div > div > div > div > a')
-            if list_or_grid.get_attribute('title') == 'List':
-                #click list view of results
-                list_or_grid.click()
-        except:
-            pass
+        list_or_grid = self.driver.find_element_by_css_selector('div#taw > div > div > div > div > a')
+        if list_or_grid.get_attribute('title') == 'List':
+            #click list view of results
+            list_or_grid.click()
     def get_results(self):
         """Fetches list of results that have product reviews on the page"""
         results = self.driver.find_elements_by_class_name('sh-dlr__list-result')
@@ -65,36 +61,30 @@ class Google_Shopping_Scraper:
                 results_with_reviews.append(result)
         self.results = results_with_reviews
 
+    def get_product_info(self, result):
+        pass
 
     def get_product_reviews(self, result):
         """Scrapes product reviews of of the first page.
         Will implement scraping on multiple pages later."""
         try:
-            result.find_element_by_css_selector('a > span:nth-of-type(2)').click()
+            result.find_element_by_css_selector(' a > span:nth-of-type(2)').click()
             sleep(1)
         except:
             return None
         #click on all reviews
-        try:
-            self.driver.find_element_by_xpath("//*[text() = 'All Reviews']").click()
-
-        except:
-            print('could not find all reviews button')
-        sleep(.5)
-        for _ in range(math.floor(self.n_reviews/10 + 2)):
+        self.driver.find_element_by_css_selector("section#reviews > div:nth-of-type(2) > div > a").click()
+        for _ in range(math.floor(self.n_reviews/10 - 1)):
             try:
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                sleep(1)
-                self.driver.find_element_by_xpath("//*[text() = 'More reviews']").find_element_by_xpath('..').click()
-                # self.driver.find_element_by_css_selector("div.F9zmi").find_element_by_xpath('..').click()
+                #NOTE reviews are displayed 10 at a time, will have to click twice to display 30 reviews
+                self.driver.find_element_by_css_selector("div#sh-fp__pagination-button-wrapper").click()
             except:
-                print('no more review page buttons')
+                print('no more review pages')
+                break
+            sleep(1)
         review_ratings = []
         reviews = []
-        try:
-            review_table = self.driver.find_element_by_css_selector('div#sh-rol__reviews-cont')
-        except:
-            print('couldn"t find review table')
+        review_table = self.driver.find_element_by_css_selector('div#sh-rol__reviews-cont')
         for i in range(self.n_reviews):
             translated = False
             #checks if there are more reviews
@@ -102,41 +92,26 @@ class Google_Shopping_Scraper:
                 review = review_table.find_element_by_css_selector(f'div#sh-rol__reviews-cont > div:nth-of-type({i+1})')
                 actions = ActionChains(self.driver)
                 actions.move_to_element(review).perform()
-                sleep(.01)
+                sleep(.1)
+                review_rating = review.find_element_by_css_selector('div .UzThIf').get_attribute('aria-label')[:2].strip()
             except:
-                try:
-                    review = self.driver.find_elements_by_css_selector('div#_-jw fade-in-animate')[i+1 - 10]
-                except:
-                    print('could not find review.')
-            try:
-                review_rating = review.find_element_by_css_selector('div .UzThIf').get_attribute('aria-label')[0]
-            except:
-                try:
-                    review_rating = review.find_element_by_css_selector('div ._-mp').get_attribute('aria-label')[0]
-                except:
-                    try:
-                        review_rating = review.find_element_by_css_selector('div ._-mq').get_attribute('aria-label')[0]
-                    except:
-                        print('could not fetch review rating')
+                print('no more reviews on this page.')
+                break
             # self.driver.execute_script("window.scrollTo(0, 220)")
             try:
                 #checks if you can show more of the review
                 review.find_element_by_css_selector('[role="button"]').click()
-                sleep(.01)
+                sleep(.1)
             except:
                 pass
             try:
                 #checks if you can translate the review
                 review.find_element_by_css_selector('[id*=transLink]').click()
-                sleep(.01)
+                sleep(.1)
                 translated = True
             except:
                 pass
-            try:
-                splits = re.split("\n", review.text)
-            except:
-                print('An error occurred in fetching review, skipping to next product page...')
-                break
+            splits = re.split("\n", review.text)
             review_splits = []
             cleaned_review = ''
             month_lst = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
@@ -155,7 +130,7 @@ class Google_Shopping_Scraper:
             reviews.append(cleaned_review)
             review_ratings.append(review_rating)
         self.driver.execute_script("window.history.go(-2)")
-        return [reviews, review_ratings]
+        return reviews, review_ratings
 
     def get_all_product_reviews_on_page(self):
         """Fetches reviews and product information for each product on page with reviews"""
@@ -168,9 +143,7 @@ class Google_Shopping_Scraper:
             price = self.results[prod].find_element_by_css_selector('span').text.split('.\n')[0]
             link = self.results[prod].find_element_by_css_selector('div .IHk3ob > a').get_attribute('href')
             overall_rating = self.results[prod].find_element_by_css_selector('div .vq3ore').get_attribute('aria-label')[:3].strip()
-            reviews_and_ratings = self.get_product_reviews(self.results[prod])
-            reviews = reviews_and_ratings[0]
-            review_ratings = reviews_and_ratings[1]
+            reviews, review_ratings = self.get_product_reviews(self.results[prod])
             #extend all_reviews only if we were able to get reviews to begin with
             if reviews:
                 self.all_reviews['listing'].extend([listing]*len(reviews))
@@ -182,7 +155,11 @@ class Google_Shopping_Scraper:
                 self.all_reviews['listing'][0]
             else:
                 continue
-
+    def get_review(self):
+        '''for testing'''
+        review_table = self.driver.find_element_by_css_selector('div.sh-rol__reviews-cont')
+        review = review_table.find_element_by_css_selector(f'div#sh-rol__reviews-cont > div:nth-of-type({4})')
+        return review
     def get_all_pages(self):
         """Fetches all reviews on every page for page in n_pages"""
         all_reviews = defaultdict(list)
